@@ -3,6 +3,8 @@
 
 websockets>=12.0    # OpenAI Realtime API WebSocket connection
 pygame>=2.6.0       # HDMI display (optional — falls back gracefully)
+pvporcupine>=3.0    # Wake-Word-Erkennung (offline, ~1 % CPU auf Pi Zero)
+                    # Gratis-Key: https://console.picovoice.ai
 
 # System packages (apt):
 #   sudo apt install fonts-nanum              # Korean/Hangul font

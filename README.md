@@ -1,6 +1,6 @@
-# ElevenLexa
+# OpenLexaPi
 
-A real-time AI voice assistant running on a **Raspberry Pi Zero 1.1**, powered by the **OpenAI Realtime API**. It listens through a Bluetooth microphone, responds via a Bluetooth speaker, and shows an animated robot face on an HDMI display.
+A real-time AI voice assistant running on a **Raspberry Pi Zero 1.1**, powered by the **OpenAI Realtime API**. Say a wake word to activate it, speak naturally, and it responds through a USB speaker. An animated robot face renders on an HDMI display.
 
 ```
 ┌─────────────────────────────────────┐
@@ -14,10 +14,11 @@ A real-time AI voice assistant running on a **Raspberry Pi Zero 1.1**, powered b
 
 ## Features
 
-- **Fully voice-driven** — no keyboard, no touch input
+- **Wake-word activation** — says "Computer" to wake, sleeps automatically after inactivity
+- **Fully offline wake-word detection** — Porcupine runs locally, ~1% CPU on Pi Zero
 - **Real-time conversation** via OpenAI `gpt-4o-realtime-preview`
 - **Multilingual** — responds in English or Korean depending on the speaker
-- **Retro robot face** on HDMI display with animated pixel eyes and live speech-to-text
+- **Retro robot face** on HDMI display — eyes close when sleeping, open when active
 - **Echo prevention** — mic is muted while the AI speaks, echo buffer is flushed after
 - **Auto-reconnect** — transparently reconnects if the WebSocket drops
 - **Graceful degradation** — runs headless (no display) without any code changes
@@ -29,7 +30,7 @@ A real-time AI voice assistant running on a **Raspberry Pi Zero 1.1**, powered b
 | Component | Details |
 |---|---|
 | **Computer** | Raspberry Pi Zero 1.1 (single-core ARMv6 @ 1 GHz, 512 MB RAM) |
-| **Speaker + Mic** | Soundcore Mini (Bluetooth) |
+| **Speaker + Mic** | USB Speaker Bar (MZ-631M or similar USB audio device) |
 | **Display** | Any 800×480 HDMI screen |
 | **Audio server** | PipeWire |
 | **OS** | Raspberry Pi OS (Bookworm) |
@@ -39,45 +40,71 @@ A real-time AI voice assistant running on a **Raspberry Pi Zero 1.1**, powered b
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│  Microphone (BT HFP)                                     │
-│       │                                                  │
-│  pacat --record (PipeWire)                               │
-│       │                                                  │
-│  AudioRecorder.audio_queue ──► send_audio() ──► OpenAI  │
-│                                                    │      │
-│  AudioPlayer ◄── receive_events() ◄────────────────┘     │
-│       │                                                  │
-│  pacat --playback (PipeWire)                             │
-│       │                                                  │
-│  Speaker (BT A2DP)           EyeDisplay (HDMI, pygame)  │
-└──────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│  SLEEPING                                                        │
+│    Porcupine (offline) ◄── pacat --record 16kHz ◄── USB Mic    │
+│         │ "Computer" detected                                    │
+│         ▼                                                        │
+│  ACTIVE                                                          │
+│    USB Mic ──► pacat --record 24kHz ──► AudioRecorder.queue     │
+│                                              │                   │
+│                                         send_audio()             │
+│                                              │                   │
+│                                       OpenAI Realtime API        │
+│                                              │                   │
+│                                      receive_events()            │
+│                                              │                   │
+│                              AudioPlayer ◄───┘                   │
+│                                  │                               │
+│                    pacat --playback 24kHz ──► USB Speaker        │
+│                                                                  │
+│    [15s inactivity] ──► back to SLEEPING                        │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-**`main.py`** — WebSocket session, audio I/O, event handling
+**`main.py`** — wake-word loop, WebSocket session, audio I/O, event handling
 **`display.py`** — Pygame rendering loop (daemon thread)
 
 ---
 
 ## Design Decisions
 
+### Wake-word: why Porcupine?
+
+Running continuously connected to OpenAI is expensive and wasteful. A local wake-word detector lets the device sleep (no WebSocket, no API cost) until the user actually wants to speak.
+
+Porcupine (by Picovoice) was chosen because:
+- It ships a **pre-compiled ARM binary** that runs on ARMv6 (Pi Zero 1.1)
+- CPU usage is ~1% — leaves the Pi's single core free for audio and WebSocket I/O
+- It works **fully offline** — no network call for wake-word detection
+- Free tier includes built-in keywords: `computer`, `jarvis`, `porcupine`, `bumblebee`, and more
+- Custom keywords (.ppn files) can be trained for free at [console.picovoice.ai](https://console.picovoice.ai)
+
 ### Why OpenAI Realtime API?
 
 The OpenAI Realtime API provides speech-to-text, language model inference, and text-to-speech in a single persistent WebSocket connection. This eliminates the need to chain three separate services (Whisper → GPT → TTS) and dramatically reduces latency. It also handles voice activity detection (VAD) server-side, so no local VAD library is needed.
 
-Previous versions used ElevenLabs Conversational AI, which was replaced because the API quota ran out quickly and the OpenAI Realtime API offers a more integrated pipeline at a lower per-minute cost.
-
 ### Why PipeWire instead of ALSA or PulseAudio?
 
-Raspberry Pi OS Bookworm ships PipeWire as the default audio server. It handles Bluetooth profile switching (A2DP ↔ HFP), resampling, and the echo-cancel module transparently — without requiring any manual ALSA configuration. `pacat` (PulseAudio-compatible client) works directly against PipeWire via its PulseAudio compatibility layer.
+Raspberry Pi OS Bookworm ships PipeWire as the default audio server. It handles resampling (USB devices run at 48 kHz natively; our pipeline uses 16/24 kHz) transparently. `pacat` (PulseAudio-compatible client) works directly against PipeWire via its PulseAudio compatibility layer.
+
+**Important:** PipeWire's default source may be set to a `.monitor` (speaker loopback) rather than the real microphone input. The code explicitly queries `pactl list sources short` to find the first `alsa_input.*` device and passes it to pacat via `--device=`, bypassing this issue.
 
 ### Why pacat instead of a Python audio library?
 
 Python audio libraries (PyAudio, sounddevice) require compiled native extensions and often have dependency conflicts on Raspberry Pi OS. `pacat` is a standard system tool, always available where PipeWire/PulseAudio is installed. It communicates via subprocess stdin/stdout, which is reliable, portable, and adds no Python dependencies.
 
+### USB audio warm-up silence
+
+USB audio devices suspend themselves when idle to save power. The first ~200 ms of audio after a period of silence gets "eaten" by the device waking up. All sound effects (startup chime, wake acknowledgement) prepend 300 ms of silence before the actual audio, ensuring the device is active before the tone begins.
+
+### Inactivity timeout
+
+After the AI finishes speaking (`response.done`), a 15-second inactivity timer starts. If the user doesn't speak within that window, the WebSocket is closed and the device returns to the sleeping (wake-word) state. The timer is cancelled while the AI is speaking (so long responses don't trigger a premature sleep) and reset whenever the user starts talking.
+
 ### Echo prevention strategy
 
-The Soundcore Mini's microphone (HFP) is physically close to its own speaker, making acoustic echo a serious problem. When the AI starts speaking, the microphone is muted in software (`recorder.muted = True`). After the AI finishes:
+The USB Speaker Bar's microphone is physically close to its speaker, making acoustic echo a problem. When the AI starts speaking, the microphone is muted in software (`recorder.muted = True`). After the AI finishes:
 
 1. A 2.5-second silence allows the room echo to decay.
 2. The microphone queue is flushed to discard any residual echo already captured.
@@ -85,31 +112,18 @@ The Soundcore Mini's microphone (HFP) is physically close to its own speaker, ma
 
 ### Why 200×120 internal canvas for the display?
 
-This project runs on a **Raspberry Pi Zero 1.1** — the original single-core ARMv6 @ 1 GHz with only 512 MB RAM and no dedicated GPU. This is one of the most constrained single-board computers available. Rendering at full 800×480 resolution every frame would saturate the CPU and starve the audio pipeline and WebSocket I/O.
+This project runs on a **Raspberry Pi Zero 1.1** — single-core ARMv6 @ 1 GHz, 512 MB RAM, no GPU. Rendering at full 800×480 every frame would saturate the CPU and starve the audio pipeline. By rendering animated elements on a 200×120 surface and scaling 4× with `pygame.transform.scale`, pixels touched per frame are reduced to 6.25% of full resolution. Combined with dirty-flag rendering, the display thread consumes a negligible fraction of CPU.
 
-By rendering the animated elements (eyes, background) on a 200×120 surface and scaling it up 4× with `pygame.transform.scale`, the number of pixels touched per frame is reduced to 6.25% of the full-resolution equivalent. Combined with dirty-flag rendering (see below), the display thread consumes a negligible fraction of the CPU.
+The 4× upscale creates a visible pixel grid that gives the robot face a retro LED-matrix aesthetic.
 
-The 4× upscale is intentional — it creates a visible pixel grid that gives the robot face a retro LED-matrix aesthetic, which fits the hardware concept.
+### Display states
 
-### Why only redraw on dirty?
-
-At idle the display does not change. Continuously calling `pygame.display.flip()` at 60 FPS would waste CPU cycles that the audio pipeline needs. The `_dirty` flag ensures the screen is only redrawn when something actually changes: new text chunk, pupil position shift, or state transition. At idle between responses, the render loop runs at 6 FPS for event polling only, and `display.flip()` is never called.
-
-### Why render text at full 800×480 resolution?
-
-The 4× upscale that makes eyes look retro makes small text unreadable — each font pixel becomes a 4×4 block. Text is therefore rendered directly on the output surface at full resolution, bypassing the canvas scaling. This gives sharp, readable text while preserving the pixelated eye aesthetic.
-
-### Why NanumSquareRound for the font?
-
-The assistant responds in English and Korean. Pygame's built-in font (`pygame.font.Font(None, ...)`) does not include Hangul glyphs, so Korean text would render as boxes. `NanumSquareRound` (from the `fonts-nanum` package) covers the full Hangul syllable block and Latin characters in one file. It also has a clean, rounded look that matches the robot display aesthetic.
-
-### Why server-side VAD instead of local VAD?
-
-Local VAD libraries (webrtcvad, silero-vad) require additional CPU cycles and careful tuning on embedded hardware. The OpenAI Realtime API's built-in server VAD (`turn_detection: server_vad`) runs in the cloud and handles turn detection reliably without consuming Pi resources. The tradeoff is a small additional network round-trip, which is acceptable for a conversational assistant.
-
-### Why asyncio + threads instead of a fully async approach?
-
-Audio I/O via subprocess (pacat) is inherently blocking. Running blocking reads in `asyncio.run_in_executor()` offloads them to a thread pool without blocking the event loop, allowing the WebSocket send/receive coroutines to run concurrently. The display runs in its own daemon thread since pygame's event loop is not asyncio-compatible.
+| State | Eyes | When |
+|---|---|---|
+| `sleeping` | Closed (horizontal lines) | Waiting for wake word |
+| `idle` | Open, pupils wandering | Session active, waiting for user |
+| `listening` | Open | User is speaking |
+| `speaking` | Open | AI is speaking |
 
 ---
 
@@ -122,44 +136,69 @@ sudo apt update
 sudo apt install -y pipewire pipewire-pulse fonts-nanum python3-pygame
 ```
 
-### 2. PipeWire echo cancellation (optional)
-
-The software already mutes the microphone while the AI speaks. If you still experience echo, you can load PipeWire's WebRTC AEC module as an extra layer:
-
-```bash
-pactl load-module module-echo-cancel aec_method=webrtc source_name=echo_cancel_source
-```
-
-To load it automatically, add to `~/.config/pipewire/pipewire.conf.d/echo-cancel.conf` or call it from a systemd user service.
-
-### 3. Python dependencies
+### 2. Python dependencies
 
 ```bash
 pip3 install --break-system-packages -r requirements.txt
 ```
 
-### 4. Bluetooth pairing (Soundcore Mini)
+### 3. Picovoice Access Key (free)
 
-```bash
-bluetoothctl
-  power on
-  scan on
-  pair <MAC>
-  trust <MAC>
-  connect <MAC>
-```
+1. Create a free account at [console.picovoice.ai](https://console.picovoice.ai)
+2. Copy your **Access Key** from the dashboard
+3. Paste it into `main.py → PORCUPINE_ACCESS_KEY`
 
-### 5. Configuration
+### 4. Configuration
 
 Edit `main.py` and set:
 
 ```python
-OPENAI_API_KEY = "sk-..."   # Your OpenAI API key
-VOICE = "verse"             # AI voice (alloy, echo, nova, shimmer, verse, ...)
-INSTRUCTIONS = "..."        # System prompt / personality
+OPENAI_API_KEY       = "sk-..."       # Your OpenAI API key
+PORCUPINE_ACCESS_KEY = "..."          # Your Picovoice access key (free)
+WAKE_WORD            = "computer"     # Built-in keyword, or "custom"
+WAKE_WORD_MODEL_PATH = ""             # Path to .ppn file if WAKE_WORD = "custom"
+INACTIVITY_TIMEOUT   = 15            # Seconds of silence before going back to sleep
+VOICE                = "verse"        # AI voice (alloy, echo, nova, shimmer, verse, ...)
+INSTRUCTIONS         = "..."          # System prompt / personality
 ```
 
-### 6. Run
+**Built-in free keywords** (no .ppn file needed):
+`computer`, `jarvis`, `porcupine`, `bumblebee`, `alexa`, `grasshopper`, `blueberry`, `grapefruit`, `terminator`, `hey barista`, `americano`, `picovoice`
+
+**Custom keyword** (e.g. "Hey Peter"):
+Go to [console.picovoice.ai](https://console.picovoice.ai) → Wake Word → create your keyword → download the `.ppn` file for Raspberry Pi → set `WAKE_WORD = "custom"` and `WAKE_WORD_MODEL_PATH = "/path/to/file.ppn"`.
+
+### 5. Autostart (systemd)
+
+```bash
+sudo nano /etc/systemd/system/openlexa.service
+```
+
+```ini
+[Unit]
+Description=OpenLexa AI Voice Assistant
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+User=pi
+WorkingDirectory=/home/pi/ElevenLexa
+ExecStart=/usr/bin/python3 /home/pi/ElevenLexa/main.py
+Restart=on-failure
+RestartSec=5
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=DISPLAY=:0
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl enable openlexa.service
+sudo systemctl start openlexa.service
+```
+
+### 6. Run manually
 
 ```bash
 python3 main.py
@@ -170,12 +209,12 @@ python3 main.py
 ## File Structure
 
 ```
-ElevenLexa/
-├── main.py           # Main application — audio pipeline + OpenAI session
+OpenLexaPi/
+├── main.py           # Main application — wake-word loop, audio pipeline, OpenAI session
 ├── display.py        # Pygame HDMI display (optional, auto-detected)
 ├── requirements.txt  # Python dependencies
 ├── README.md         # This file
-└── archive/          # Old debug scripts and patches (not needed for running)
+└── archive/          # Old debug scripts (not needed for running)
 ```
 
 ---
@@ -184,12 +223,15 @@ ElevenLexa/
 
 | What | Where | How |
 |---|---|---|
+| Wake word | `main.py → WAKE_WORD` | Built-in keyword name or `"custom"` |
+| Custom wake word | `main.py → WAKE_WORD_MODEL_PATH` | Path to `.ppn` file from Picovoice Console |
+| Inactivity timeout | `main.py → INACTIVITY_TIMEOUT` | Seconds before returning to sleep |
 | AI personality | `main.py → INSTRUCTIONS` | Edit the system prompt string |
 | Voice | `main.py → VOICE` | Any OpenAI Realtime voice name |
 | Languages | `main.py → INSTRUCTIONS` | Change language instructions |
 | VAD sensitivity | `main.py → turn_detection.threshold` | 0.0–1.0, lower = more sensitive |
 | Eye colours | `display.py → colour constants` | RGB tuples at the top of the file |
-| Display layout | `display.py → EYE_AREA_H, TEXT_AREA_Y` | Adjust the split point |
+| Display layout | `display.py → EYE_AREA_H, TEXT_AREA_Y` | Adjust the eye/text split point |
 
 ---
 

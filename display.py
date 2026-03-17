@@ -75,6 +75,7 @@ MAX_PUPIL_OFFSET = 6            # Max random pupil displacement in px
 _KOREAN_FONT = "/usr/share/fonts/truetype/nanum/NanumSquareRoundR.ttf"
 
 # States (mirrored in main.py)
+STATE_SLEEPING  = "sleeping"   # Wake-word mode: eyes closed
 STATE_IDLE      = "idle"
 STATE_LISTENING = "listening"
 STATE_SPEAKING  = "speaking"
@@ -240,8 +241,14 @@ class EyeDisplay:
             canvas.fill(DARK_BG)
             pygame.draw.line(canvas, SEP_COL,
                              (0, EYE_AREA_H), (RENDER_W, EYE_AREA_H), 1)
-            _draw_eye(canvas, L_EYE[0], L_EYE[1], px, py)
-            _draw_eye(canvas, R_EYE[0], R_EYE[1], px, py)
+            if state == STATE_SLEEPING:
+                # Closed eyes: horizontal lines (eyelids shut)
+                for cx, cy in (L_EYE, R_EYE):
+                    pygame.draw.line(canvas, EYE_MID,
+                                     (cx - EYE_RX, cy), (cx + EYE_RX, cy), 3)
+            else:
+                _draw_eye(canvas, L_EYE[0], L_EYE[1], px, py)
+                _draw_eye(canvas, R_EYE[0], R_EYE[1], px, py)
 
             # --- Upscale to 800x480 ---
             scaled = pygame.transform.scale(canvas, (OUT_W, OUT_H))
