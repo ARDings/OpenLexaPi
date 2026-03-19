@@ -1,5 +1,7 @@
 # OpenLexaPi
 
+> 📖 **Full guide & tutorial:** [xrchris.com/projects/openlexa](https://xrchris.com/projects/openlexa/)
+
 A real-time AI voice assistant running on a **Raspberry Pi Zero 1.1**, powered by the **OpenAI Realtime API**. Say a wake word to activate it, speak naturally, and it responds through a USB speaker. An animated robot face renders on an HDMI display.
 
 ```
@@ -27,13 +29,17 @@ A real-time AI voice assistant running on a **Raspberry Pi Zero 1.1**, powered b
 
 ## Hardware
 
-| Component | Details |
-|---|---|
-| **Computer** | Raspberry Pi Zero 1.1 (single-core ARMv6 @ 1 GHz, 512 MB RAM) |
-| **Speaker + Mic** | USB Speaker Bar (MZ-631M or similar USB audio device) |
-| **Display** | Any 800×480 HDMI screen |
-| **Audio server** | PipeWire |
-| **OS** | Raspberry Pi OS (Bookworm) |
+| Component | Details | ~Price |
+|---|---|---|
+| **Computer** | [Raspberry Pi Zero 2 W](https://amzn.to/3NmtnhS) | ~15 € |
+| **Audio Option A** | [Soundcore Mini — Bluetooth Speaker + Mic](https://amzn.to/417UgZU) | ~20 € |
+| **Audio Option B** | [USB Speaker Bar (plug-and-play)](https://amzn.to/4drdnpi) | ~15 € |
+| **Display** *(optional)* | [3.5" HDMI Display](https://amzn.to/4bysuL3) | ~20 € |
+| **MicroSD + Power** | [MicroSD 16 GB+ & USB PSU](https://amzn.to/3NsZGLR) | ~13 € |
+| **Audio server** | PipeWire | — |
+| **OS** | Raspberry Pi OS (Bookworm) | — |
+
+> *Affiliate links — buying through these supports the project at no extra cost to you.*
 
 ---
 
