@@ -62,6 +62,7 @@ A real-time AI voice assistant running on a **Raspberry Pi Zero 1.1**, powered b
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+**`launcher.py`** — boot-time launcher: waits for USB mic, shows countdown, then exec's into main.py
 **`main.py`** — wake-word loop, WebSocket session, audio I/O, event handling
 **`display.py`** — Pygame rendering loop (daemon thread)
 
@@ -177,13 +178,13 @@ sudo nano /etc/systemd/system/openlexa.service
 ```ini
 [Unit]
 Description=OpenLexa AI Voice Assistant
-After=network-online.target sound.target
+After=network-online.target bluetooth.target sound.target
 Wants=network-online.target
 
 [Service]
 User=pi
 WorkingDirectory=/home/pi/ElevenLexa
-ExecStart=/usr/bin/python3 /home/pi/ElevenLexa/main.py
+ExecStart=/usr/bin/python3 /home/pi/ElevenLexa/launcher.py
 Restart=on-failure
 RestartSec=5
 Environment=XDG_RUNTIME_DIR=/run/user/1000
@@ -198,6 +199,9 @@ sudo systemctl enable openlexa.service
 sudo systemctl start openlexa.service
 ```
 
+> **Why `launcher.py` instead of `main.py` directly?**
+> PipeWire is a user-level service and may not be fully initialised when the system service starts. `launcher.py` polls `pactl list sources` until the USB microphone (`alsa_input.*`) appears, then shows a countdown on the display before handing off to `main.py` via `os.execv`. This eliminates the race condition where Porcupine starts with a non-functional audio source and only reacts to very loud sounds.
+
 ### 6. Run manually
 
 ```bash
@@ -210,6 +214,7 @@ python3 main.py
 
 ```
 OpenLexaPi/
+├── launcher.py       # Boot launcher — waits for USB mic, countdown, then starts main.py
 ├── main.py           # Main application — wake-word loop, audio pipeline, OpenAI session
 ├── display.py        # Pygame HDMI display (optional, auto-detected)
 ├── requirements.txt  # Python dependencies
